@@ -1,0 +1,360 @@
+---
+title: "IMA_first_Project"
+authors: The Knights
+output: html_document
+---
+
+```{r}
+LIBOR <- read.csv("/Users/anthonynguyen/Desktop/IMA_bootcamp/Week_4/LIBOR_RATES/July_17/LIBOR USD.csv")
+```
+
+```{r}
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(timeDate)
+```
+
+## Finding The right rate to track
+
+```{r}
+##############################################################################
+# Create a new table with column name "time stamp" containing entries with format Year-Month-Day 
+##############################################################################
+days_before_holiday <- 10
+days_after_holiday <- 15
+rates_to_track <- LIBOR
+
+# Convert date format to year-month-day
+rates_to_track <- rates_to_track  %>% mutate(timestamp = as.Date(dmy(LIBOR$Date)))  
+##############################################################################
+
+```
+
+```{r}
+##############################################################################
+
+# listHolidays() will give you a list of possible holidays to use
+# In this case, we're using ChristmasDay
+
+holiday_var = "ChristmasDay"
+holidays <- c(holiday_var)  
+Year_begin = 2003
+Year_end = 2019
+
+#https://stackoverflow.com/questions/41825688/loop-over-holidays-in-timedate-package
+
+# Create a Table named "holiday_dates" line 59-63
+  
+# Holiday        | Date 
+# ChristmasDay     2003-12-25
+# ChristmasDay     2004-12-25
+# ............     ..........
+# ChristmasDay     2009-12-25 
+
+holiday_dates = do.call(rbind,
+        lapply(holidays, function(i){
+          foo <- match.fun(i)  
+          data.frame(Holiday = i,
+                     Date = as.Date(foo(Year_begin:Year_end)))
+        }))
+#############################################################################
+```
+
+```{r}
+## a function that finds how far a date is from the given holiday (the minimum distance). returns a column of this distance and the year of the holiday
+
+close_to_holiday <- function(input_date){
+  distance_from_all_holidays <- mutate(holiday_dates, relative_date = floor(as.period(interval(Date, input_date) ) %/% days(1) ) )%>%
+    mutate(absolute_relative_date = abs(relative_date)) %>% arrange(absolute_relative_date)
+  return(c(distance_from_all_holidays[1, "relative_date"], year(distance_from_all_holidays[1, "Date"])))
+}
+
+#############################################################################
+
+```
+
+```{r}
+
+# next two functions are a hack to make the dataframe wrangling work, can be made better 
+get_relative_date <- function(input_date){
+  return(close_to_holiday(input_date)[1])
+}
+
+get_relative_holiday_year <- function(input_date){
+  return(close_to_holiday(input_date)[2])
+}
+
+#############################################################################
+
+####### Finally, add relative holiday data to the dataframe and filter for the days you need 
+
+rates_to_track_with_holiday_data <- rates_to_track %>% mutate(relative_date = lapply(timestamp, get_relative_date) ) %>% mutate(holiday_year = lapply(timestamp, get_relative_holiday_year)) %>%
+  filter(relative_date >= days_before_holiday * -1 & relative_date <= days_after_holiday)
+
+
+# write.csv(rates_to_track_with_holiday_data, "filtered_data.csv") uncomment if you want a file of the results 
+
+
+
+
+```
+
+```{r}
+View(rates_to_track_with_holiday_data)
+
+```
+## Fiting Model by Xin
+```{r}
+####################
+##add a column of percentage change 
+LIBOR_PC = cbind(data.frame(Percent_Change_ON = 100 * diff(log(rates_to_track_with_holiday_data$ON)), Percent_Change_1W = 100 * diff(log(rates_to_track_with_holiday_data$X1W))), 
+                 rates_to_track_with_holiday_data[-1, ])
+
+Dec_Jan = LIBOR_PC %>%
+  ##convert the Date into a timestamp class
+  mutate(timestamp = dmy(LIBOR_PC$Date)) %>%
+  mutate(Year = year(timestamp), MonthDay = format(timestamp, "%m%d")) %>%
+  filter(MonthDay >= "1217" | MonthDay <= "0108") %>%
+  mutate(Pre = ifelse(MonthDay > "1224", "Post", ifelse(MonthDay <= "0131", "Post", "Pre"))) 
+  
+############################################
+
+```
+
+```{r}
+
+Years_array <- c("2004","2005","2006","2007","2008","2009","2010","2011","2012","2013","2014","2015","2016","2017","2018")
+
+Heaviside <- function(x,a = 0){if(x==0){return(0)} else{return((sign(x)+1)/2)}}
+
+# year in {"2004",....,"2018"} where "20XX" refers to "20XX-20X(X+1)"
+# USAGE: model <- lin_regression("2017",Dec_Jan)
+lin_regression <- function(year,Data_Filter){
+  Winter <- rates_to_track_with_holiday_data %>% filter(as.double(holiday_year) == as.double(year))
+  return(lm(ON ~ Week.day,data=Winter))}
+
+# Function returns the filtered data table
+# USAGE: table_1 <- filtered_data("2018",Dec_Jan)
+filtered_data <- function(year,Data_Filter){
+  Winter <- rates_to_track_with_holiday_data %>% filter(as.double(holiday_year) == as.double(year))
+  return(Winter)}
+
+# Vector of intercepts beta_0s
+vector_intercept = c()
+j = 0
+for(i in Years_array){
+  j = j+1
+  model <- lin_regression(i,Dec_Jan)
+  vector_intercept[j] = coef(model)[1]
+}
+
+# vector of data from year 2004-2019
+vector_data_table = c()
+j = 0
+for(i in Years_array){
+  j = j+1
+  Winter <- filtered_data(i,Dec_Jan)
+  vector_data_table[[j]] <- Winter
+}
+
+# New table of rates shift by intercept
+# Access table by vector_data_table[[j]] j = 1 refers to "2004" to j = 15 to "2018"s
+for(j in c(1:15)){
+  vector_data_table[[j]] <- vector_data_table[[j]] %>% mutate(shifted_data_int = ON - vector_intercept[j]) %>% mutate(Pre = lapply(vector_data_table[[j]]$relative_date,Heaviside))
+}
+
+# year in {"2004",....,"2018"} where "20XX" refers to "20XX-20X(X+1)"
+# USAGE: model <- lin_regression("2017",Dec_Jan)
+lin_regression_two_predictors <- function(year,Data_Filter){
+  Winter <- rates_to_track_with_holiday_data %>% filter(as.double(holiday_year) == as.double(year))
+  return(lm(ON ~ Week.day + Pre,data=Winter))}
+
+
+###########################################
+
+```
+
+```{r}
+  
+#write.csv(Dec_Jan, "Dec_Jan.csv")
+
+One_Year = Dec_Jan %>%
+  filter(between(timestamp, as.Date("2018-12-17"), as.Date("2019-01-08")))
+
+ggplot(Dec_Jan, aes(y = ON, x = MonthDay, group = Year, color = Year)) + geom_point() + geom_line()
+
+ggplot(One_Year, aes(y = ON, x = timestamp)) + geom_point() 
+
+###percentage change
+############problem 
+##add a column of percentage change of overnight interest rate percentage change
+#mutate(Percenate_Change = diff(log(ON)))
+
+summary(lm(Percent_Change_ON ~  Pre , data = Dec_Jan))
+
+summary(lm(Percent_Change_1W ~  Pre , data = Dec_Jan))
+
+ggplot(Dec_Jan, aes(y = Percent_Change_1W, x = timestamp)) + geom_point() + geom_smooth(method = "lm")
+ggplot(Dec_Jan, aes(y = Percent_Change_1W, x = timestamp, group = Pre, color = Pre)) + geom_point() + geom_smooth(method = "lm")
+
+
+
+
+```
+
+
+<!-- ##### You migh ignore the rest of my trial and error code for todays!!! -->
+
+
+<!-- ```{r} -->
+<!-- Dec_Jan = LIBOR %>% -->
+<!--   ##convert the Date into a timestamp class -->
+<!--   mutate(timestamp = dmy(LIBOR$Date)) %>% -->
+<!--   mutate(Year = year(timestamp), MonthDay = format(timestamp, "%m%d")) %>% -->
+<!--   filter(MonthDay >= "1217" | MonthDay <= "0108")  -->
+
+<!-- view(Dec_Jan) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- DecJan_2018<-Dec_Jan %>% -->
+<!-- filter(between(timestamp,as.Date("2018-12-17"), as.Date("2019-01-08")))   -->
+
+<!-- view(DecJan_2018) -->
+
+
+
+<!-- DecJan_2017<-Dec_Jan %>% -->
+<!-- filter(between(timestamp,as.Date("2017-12-17"), as.Date("2018-01-08")))   -->
+
+
+<!-- DecJan_2016<-Dec_Jan %>% -->
+<!-- filter(between(timestamp,as.Date("2016-12-17"), as.Date("2017-01-08")))  -->
+
+
+
+<!-- DecJan_2015<-Dec_Jan %>% -->
+<!-- filter(between(timestamp,as.Date("2015-12-17"), as.Date("2016-01-08")))  -->
+
+
+<!-- DecJan_2014<-Dec_Jan %>% -->
+<!-- filter(between(timestamp,as.Date("2014-12-17"), as.Date("2015-01-08")))  -->
+
+<!-- DecJan_2013<-Dec_Jan %>% -->
+<!-- filter(between(timestamp,as.Date("2013-12-17"), as.Date("2014-01-08")))  -->
+
+
+<!-- DecJan_2012<-Dec_Jan %>% -->
+<!-- filter(between(timestamp,as.Date("2012-12-17"), as.Date("2013-01-08")))  -->
+
+<!-- view(DecJan_2018) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- p1 <- plot_ly(DecJan_2015, x = ~timestamp, y = ~ON) %>% -->
+<!--   add_lines(name = ~"2015") -->
+<!-- p2 <- plot_ly(DecJan_2016, x = ~timestamp, y = ~ON) %>% -->
+<!--   add_lines(name = ~"2016") -->
+<!-- p3 <- plot_ly(DecJan_2017, x = ~timestamp, y = ~ON) %>% -->
+<!--   add_lines(name = ~"2017") -->
+<!-- p4 <- plot_ly(DecJan_2018, x = ~timestamp, y = ~ON) %>% -->
+<!--   add_lines(name = ~"2018") -->
+<!-- p <- subplot(p1, p2,p3,p4) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- p1 <- plot_ly(DecJan_2015, x = ~timestamp, y = ~X1W) %>% -->
+<!--   add_lines(name = ~"2015") -->
+<!-- p2 <- plot_ly(DecJan_2016, x = ~timestamp, y = ~X1W) %>% -->
+<!--   add_lines(name = ~"2016") -->
+<!-- p3 <- plot_ly(DecJan_2017, x = ~timestamp, y = ~X1W) %>% -->
+<!--   add_lines(name = ~"2017") -->
+<!-- p4 <- plot_ly(DecJan_2018, x = ~timestamp, y = ~X1W) %>% -->
+<!--   add_lines(name = ~"2018") -->
+<!-- p_1W <- subplot(p1, p2,p3,p4) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # Add a scatterplot layer -->
+<!-- ggplot(DecJan_2018, aes(y = ON ,x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2018, aes(y = X1W, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2018, aes(y = X1M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2018, aes(y = X2M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2018, aes(y = X3M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2018, aes(y = X6M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+<!-- ggplot(DecJan_2018, aes(y = X12M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- # Add a scatterplot layer -->
+<!-- ggplot(DecJan_2015, aes(y = ON ,x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2015, aes(y = X1W, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- # Add a scatterplot layer -->
+<!-- ggplot(DecJan_2012, aes(y = ON ,x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2012, aes(y = X1W, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2012, aes(y = X1M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2012, aes(y = X2M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2012, aes(y = X3M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!-- ggplot(DecJan_2012, aes(y = X6M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+<!-- ggplot(DecJan_2012, aes(y = X12M, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- ggplot(DecJan_2017, aes(y = ON, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!--  ggplot(DecJan_2016, aes(y = ON, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!--  ggplot(DecJan_2015, aes(y = ON, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+<!--  ggplot(DecJan_2014, aes(y = ON, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+<!--  ggplot(DecJan_2013, aes(y = ON, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+
+
+<!--  ggplot(DecJan_2012, aes(y = ON, x = timestamp)) +  -->
+<!--     geom_point()+geom_line() -->
+<!-- ``` -->

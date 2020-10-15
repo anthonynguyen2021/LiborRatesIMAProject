@@ -1,0 +1,138 @@
+---
+title: "plots_project_1"
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r}
+PATH = "/Users/davood/Desktop/IMA_Refrences/IMA_proj1/Libor_Rates/"
+FILENAME = "LIBOR USD.csv"
+holiday_var = "DENewYearsEve"
+
+```
+
+
+```{r}
+# Load Libraries
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(timeDate)
+
+# Concatenate PATH and FILENAME strings
+File_Path = paste(PATH,FILENAME,sep="")
+
+# READ in CSV and name it "DATA"
+DATA <- read.csv(File_Path)
+
+```
+
+
+
+```{r}
+ 
+preH_rates <-DATA %>%
+  select(Date,ON,X1W,X1M,X3M,X6M,X12M)
+  
+
+
+
+#view(preH_rates)
+
+
+#view(preH_rates)  
+```
+
+## converting to Time series
+```{r}
+                
+
+Libor_rate = ts(preH_rates[,5],frequency=365,start=c(2003,2019))
+
+```
+
+```{r}
+plot(Libor_rate,type="l",xlab = "Years",ylab="LIBOR rate",main="all rates_YOUR OPINION",col = "blue",)
+
+```
+
+```{r}
+
+
+
+
+
+ggplot(preH_rates, aes(x=seq(1,3578), y= Libor_rate, color='variable')) +
+    geom_line()
+```
+
+
+```{r}
+
+library(dygraphs)
+
+Libor_data = preH_rates[1:100,4:6]
+dygraph(Libor_data,main="LIBOR rate" ) %>% 
+  dyRangeSelector()%>% 
+  dyOptions(drawPoints = TRUE, 
+            pointSize = 3,
+            strokeWidth=2,
+            colors = RColorBrewer::brewer.pal(4, "Set2"))%>%
+  dyLegend(width = 1200)
+```
+
+
+
+
+```{r}
+library(e1071)
+library(ggplot2)
+#generate simulated data
+set.seed(2)
+n<-80
+x1 = 2+rnorm(n,mean = 0,sd = .1)
+x2 = 2+rnorm(n,mean = .2,sd = .1)
+m = c(rep(-1,n), rep(1,n))
+
+y1 = c(x2,x1)
+#create better separation
+z = seq(-(n-1),n)
+D<-cbind(z,m,y1)
+#D <- cbind(y,x1)
+Df <- as.data.frame(D)
+
+model_1_f = lm(y~z+y1 ,Df)
+
+
+```
+```{r}
+
+ggplot(Df, aes(x=z, y = y1, color = factor(m)) )+
+ geom_point()+
+  scale_fill_manual(values = c("purple","red"))+ 
+stat_smooth(method="lm", formula=y~poly(x, 1), se=FALSE)
+
+
+
+# geom_hline(yintercept=, color='coral', size=5)
+#stat_smooth(method="lm", formula=y~poly(x, 1), se=FALSE)
+```
+
+
+
+```{r}
+# To show different lines in different facets, use aesthetics
+
+p <- ggplot(Df, aes(z, y1, color = factor(m)) ) +
+  geom_point() +
+  facet_wrap(~ m)
+
+mean_wt <- data.frame(m=c(-1,1), y1 = c(2.28, 2))
+p + geom_hline(aes(yintercept = y1,color = factor(m)), mean_wt)
+
+```
+
+
+
+

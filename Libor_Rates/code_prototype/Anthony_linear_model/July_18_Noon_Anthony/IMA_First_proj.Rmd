@@ -1,0 +1,180 @@
+USAGE: 
+
+1) First, run each of the code chunk from top to bottom. Next, run just the last code chunk to get the plots.
+2) Make sure you have the correct Path name and file name in the 2nd code chunk (line 19-28)
+3) In the 4th code chunk, you can change holiday_var to "USIndependenceDay", "ChristmasDay", "USLaborDay" (line ~ 51)
+4) In the 6th code chunk, you can tweak the "days_before_holiday" and "days_after_holiday" variables (line ~ 102-103)
+5) In the 7th code chunk, you can set "case" to equal 1 for ON, 2 for 1 week, 3 for 4 weeks, 4 for 2 months, 5 for 6 months (line ~ 117)
+```{r}
+# Load Libraries
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(timeDate)
+```
+
+```{r}
+PATH = "/Users/anthonynguyen/Desktop/IMA_bootcamp/Week_4/LIBOR_RATES/July_17/"
+
+# Name of your file dot extension (e.g. LIBOR_USD.csv)
+FILENAME = "LIBOR_USD.csv"
+
+# Concatenate PATH and FILENAME strings
+File_Path = paste(PATH,FILENAME,sep="")
+
+# READ in CSV and name it "DATA"
+DATA <- read.csv(File_Path)
+```
+
+```{r}
+##############################################################################
+# Create a new table named "rates_to_track" from "LIBOR" with column name "time stamp" containing entries with format Year-Month-Day 
+##############################################################################
+rates_to_track <- DATA
+
+# Convert date format to year-month-day
+rates_to_track <- rates_to_track  %>% mutate(timestamp = as.Date(dmy(rates_to_track$Date)))  
+##############################################################################
+
+```
+
+```{r}
+##############################################################################
+
+# listHolidays() will give you a list of possible holidays to use
+# In this case, we're using ChristmasDay
+
+# Examples: "USIndependenceDay", "ChristmasDay", "USLaborDay"
+
+holiday_var = "ChristmasDay"
+holidays <- c(holiday_var)  
+Year_begin = 2003
+Year_end = 2019
+
+#https://stackoverflow.com/questions/41825688/loop-over-holidays-in-timedate-package
+
+# Create a Table named "holiday_dates" line 59-63
+  
+# Holiday        | Date 
+# ChristmasDay     2003-12-25
+# ChristmasDay     2004-12-25
+# ............     ..........
+# ChristmasDay     2009-12-25 
+
+holiday_dates = do.call(rbind,
+        lapply(holidays, function(i){
+          foo <- match.fun(i)  
+          data.frame(Holiday = i,
+                     Date = as.Date(foo(Year_begin:Year_end)))
+        }))
+#############################################################################
+```
+
+```{r}
+# A function that finds how far a date is from the given holiday (the minimum distance). returns a column of this distance and the year of the holiday
+
+close_to_holiday <- function(input_date){
+  distance_from_all_holidays <- mutate(holiday_dates, relative_date = floor(as.period(interval(Date, input_date) ) %/% days(1) ) )%>%
+    mutate(absolute_relative_date = abs(relative_date)) %>% arrange(absolute_relative_date)
+  return(c(distance_from_all_holidays[1, "relative_date"], year(distance_from_all_holidays[1, "Date"])))
+}
+
+#############################################################################
+```
+
+```{r message=FALSE}
+
+# next two functions are a hack to make the dataframe wrangling work, can be made better 
+get_relative_date <- function(input_date){
+  return(close_to_holiday(input_date)[1])
+}
+
+get_relative_holiday_year <- function(input_date){
+  return(close_to_holiday(input_date)[2])
+}
+
+#############################################################################
+
+# Specify how many days before holiday and how many after
+
+days_before_holiday <- 15
+days_after_holiday <- 15
+
+# Finally, add relative holiday data to the dataframe and filter for the days you need 
+
+rates_to_track_with_holiday_data <- rates_to_track %>% mutate(relative_date = lapply(timestamp, get_relative_date) ) %>% mutate(holiday_year = lapply(timestamp, get_relative_holiday_year)) %>%
+  filter(relative_date >= days_before_holiday * -1 & relative_date <= days_after_holiday)
+
+```
+
+```{r}
+# Creates vector Years_array = ("2004", "2005",...,"2018")
+Years_array <- paste(c(min(as.double(rates_to_track_with_holiday_data$holiday_year)):max(as.double(rates_to_track_with_holiday_data$holiday_year))))
+Number_of_Years <- length(Years_array)
+# Switch: 1 (ON), 2 (1 Week), 3 (4 weeks), 4 (2 months),5 (6 months)
+case <- 4
+# Create Heaviside function for data wrangling
+Heaviside <- function(x,a = 0){if(x==0){return(0)} else{return((sign(x)+1)/2)}}
+
+# Function performs regression on a given year in "holiday_data"
+linear_regression <- function(year,holiday_data,case){
+  
+  holiday_data <- holiday_data %>% filter(as.double(holiday_year) == as.double(year))
+  return(lm(switch(case,ON,X1W,X1M,X2M,X6M) ~ as.integer(relative_date),data = holiday_data))}
+  # change relative_date to week.day
+
+# Function filter data in "holiday_data" in a given year
+filtered_data <- function(year,holiday_data){
+  holiday_data <- holiday_data %>% filter(as.double(holiday_year) == as.double(year))
+  return(holiday_data)}
+
+# Vector of intercepts beta_0's
+vector_intercept = c()
+for(j in c(1:Number_of_Years)){
+  vector_intercept[j] = coef(linear_regression(Years_array[j],rates_to_track_with_holiday_data,case))[1]
+}
+
+# Vector of tabular data from year 2004-2019
+vector_data_table = c()
+for(j in c(1:Number_of_Years)){
+  vector_data_table[[j]] <- filtered_data(Years_array[j],rates_to_track_with_holiday_data)
+}
+
+# Add columns which includes recentered rates and Pre column
+for(j in c(1:Number_of_Years)){
+  vector_data_table[[j]] <- vector_data_table[[j]] %>% mutate(recentered_rates = switch(case,ON,X1W,X1M,X2M,X6M) - vector_intercept[j]) %>% mutate(Pre = lapply(vector_data_table[[j]]$relative_date,Heaviside))
+}
+
+# Concatenate my tabular data from each year
+largeData <- vector_data_table[[1]]
+for(j in c(2:Number_of_Years)){
+  largeData <- rbind(largeData,vector_data_table[[j]])
+}
+
+# Construct linear regrerssion model 
+# recentered_rates (response), relative_date (predictor), Pre (binary categorical predictor)
+
+model_recentered <- lm(recentered_rates ~ as.integer(Pre), data = largeData)
+summary(model_recentered)
+
+model_recentered_pre <- lm(recentered_rates ~ as.integer(relative_date) + as.integer(Pre), data = largeData)
+summary(model_recentered_pre)
+
+# Scatter Plot of recentered_rates vs relative_date
+ggplot(largeData) + geom_point(aes(x = as.numeric(relative_date), y = recentered_rates, color = holiday_year))
+
+```
+
+```{r}
+summary(model_recentered)
+#r_squared_adj_model_1 <- summary(model_recentered)$adj.r.squared
+#r_pvalue_model_1 <- summary(model_recentered)$coefficients[2,4]
+
+```
+
+```{r}
+summary(model_recentered_pre)
+#r_squared_adj_model_2 <- summary(model_recentered_pre)$adj.r.squared
+#r_pvalue_model_2 <- summary(model_recentered)$coefficients[2,4]
+```
